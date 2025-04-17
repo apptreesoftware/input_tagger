@@ -1,0 +1,25 @@
+name: input_tagger
+description: "A Flutter widget that provides tagging capabilities with spaces in tags, supporting various triggers like @ and # with customizable styling."
+version: 0.0.1
+homepage: https://github.com/TheNoumanDev/input_tagger
+repository: https://github.com/TheNoumanDev/input_tagger
+issue_tracker: https://github.com/TheNoumanDev/input_tagger/issues
+
+environment:
+  sdk: '>=2.12.0 <4.0.0'
+  flutter: ">=1.17.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^2.0.1
+
+flutter:
+  # To add assets to your package, add an assets section, like this:
+  # assets:
+  #   - images/a_dot_burr.jpeg
+  #   - images/a_dot_ham.jpeg
