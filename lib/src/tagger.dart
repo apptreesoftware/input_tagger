@@ -246,6 +246,22 @@ class _InputTaggerState extends State<InputTagger> {
     List<String> result = [];
     int start = startIndex;
 
+    // Check if this entire text is a tag
+    TaggedText? fullTag = _tagTrie.search(text, startIndex);
+    if (fullTag != null && fullTag.startIndex == startIndex) {
+      // This entire text is a tag, format it consistently
+      String formattedTagText =
+          fullTag.text.substring(1); // Remove trigger char
+      String triggerChar = fullTag.text[0].toString();
+
+      formattedTagText = _formatTagText(
+        _tags[fullTag]!,
+        formattedTagText,
+        triggerChar,
+      );
+      return formattedTagText;
+    }
+
     final nestedWords = text.splitWithDelim(_triggerCharactersPattern);
     bool startsWithTrigger =
         triggerCharacters.contains(text[0]) && nestedWords.first.isNotEmpty;
@@ -323,32 +339,29 @@ class _InputTaggerState extends State<InputTagger> {
 
     if (controllerText.isEmpty) return "";
 
-    final splitText = controllerText.split(" ");
+    // Create a copy of the text to work with
+    String result = controllerText;
 
-    List<String> result = [];
-    int start = 0;
-    int end = splitText.first.length;
-    int length = splitText.length;
+    // Sort tags by starting position (descending) to avoid position issues when replacing
+    List<TaggedText> sortedTags = _tags.keys.toList()
+      ..sort((a, b) => b.startIndex.compareTo(a.startIndex));
 
-    for (int i = 0; i < length; i++) {
-      final text = splitText[i];
+    // Replace each tag with its formatted version
+    for (var tag in sortedTags) {
+      String id = _tags[tag]!;
+      String tagText = tag.text.substring(1); // Remove trigger char
+      String triggerChar = tag.text[0].toString();
 
-      if (text.contains(_triggerCharactersPattern)) {
-        final parsedText = _parseAndFormatNestedTags(text, start);
-        result.add(parsedText);
-      } else {
-        result.add(text);
-      }
+      String formattedTagText = _formatTagText(
+        id,
+        tagText,
+        triggerChar,
+      );
 
-      start = end + 1;
-      if (i + 1 < length) {
-        end = start + splitText[i + 1].length;
-      }
+      result =
+          result.replaceRange(tag.startIndex, tag.endIndex, formattedTagText);
     }
-
-    final resultString = result.join(" ");
-
-    return resultString;
+    return result;
   }
 
   /// Whether to not execute the [_tagListener] logic.
@@ -651,7 +664,22 @@ class _InputTaggerState extends State<InputTagger> {
   void _tagListener() {
     final currentCursorPosition = controller.selection.baseOffset;
     final text = controller.text;
-
+    if (_lastCachedText.length > text.length) {
+      // Deletion occurred
+      for (var tag in _tags.keys) {
+        if (currentCursorPosition <= tag.endIndex - 1 &&
+            currentCursorPosition >= tag.startIndex) {
+          _defer = true;
+          _tags.remove(tag);
+          _tagTrie.clear();
+          _tagTrie.insertAll(_tags.keys);
+          _lastCachedText = text;
+          _onFormattedTextChanged();
+          return;
+        }
+      }
+    }
+    // Check for backtracking search behavior
     if (_shouldSearch &&
         _isBacktrackingToSearch &&
         ((text.trim().length < _lastCachedText.trim().length &&
@@ -838,7 +866,9 @@ class _InputTaggerState extends State<InputTagger> {
     controller._setDeferCallback(() => _defer = true);
     controller._setTags(_tags);
     controller._setTagStyles(widget.triggerCharacterAndStyles);
-    controller._setTriggerCharactersRegExpPattern(_triggerCharactersPattern);
+    // Initialize the pattern first
+    final pattern = _triggerCharactersPattern;
+    controller._setTriggerCharactersRegExpPattern(pattern);
     controller._registerFormatTagTextCallback(_formatTagText);
     controller.addListener(_tagListener);
     controller._onClear(() {
@@ -916,9 +946,10 @@ class InputTaggerController extends TextEditingController {
     _tagStyles = tagStyles;
   }
 
-  RegExp? _triggerCharsPattern;
+  RegExp? _triggerCharsPattern = RegExp(r'[@#]'); // Provide a sensible default;
 
-  RegExp get _triggerCharactersPattern => _triggerCharsPattern!;
+  RegExp get _triggerCharactersPattern =>
+      _triggerCharsPattern ?? RegExp(r'[@#]');
 
   void _setTriggerCharactersRegExpPattern(RegExp pattern) {
     _triggerCharsPattern = pattern;
@@ -944,6 +975,9 @@ class InputTaggerController extends TextEditingController {
   int _getCursorPosition(int selectionOffset) {
     String subText = text.substring(0, selectionOffset);
     int offset = 0;
+
+    final pattern = _triggerCharsPattern;
+    if (pattern == null) return subText.length; // or handle appropriately
 
     for (var tag in _tags.keys) {
       if (tag.startIndex < selectionOffset && tag.endIndex <= selectionOffset) {
@@ -1022,62 +1056,89 @@ class InputTaggerController extends TextEditingController {
   ]) {
     _clearCallback?.call();
     _text = text;
-    String newText = text;
 
-    pattern ??= RegExp(r'([@#]\w+(?:\s+\w+)*\#.+?\#)');
-    parser ??= (value) {
-      final split = value.split("#");
-      if (split.length == 4) {
-        // Handle multi-word tags
-        return [split[1].trim(), split[2].trim()];
+    // If there are no tags yet, try to find them using the pattern
+    if (_tags.isEmpty && text.isNotEmpty) {
+      String newText = text;
+
+      pattern ??= RegExp(r'([@#]\w+(?:\s+\w+)*\#.+?\#)');
+      parser ??= (value) {
+        final split = value.split("#");
+        if (split.length == 4) {
+          // Handle multi-word tags
+          return [split[1].trim(), split[2].trim()];
+        }
+        // Handle user mentions with spaces
+        final id = split.first.trim().replaceFirst("@", "");
+        return [id, split[split.length - 2].trim()];
+      };
+
+      final matches = pattern.allMatches(text);
+      int diff = 0;
+
+      for (var match in matches) {
+        try {
+          final matchValue = match.group(1)!;
+
+          final idAndTag = parser(matchValue);
+          final triggerChar = text.substring(match.start, match.start + 1);
+
+          // Preserve spaces in tags
+          final tag = "$triggerChar${idAndTag.last.trim()}";
+          final startIndex = match.start;
+          final endIndex = startIndex + tag.length;
+
+          newText = newText.replaceRange(
+            startIndex - diff,
+            startIndex + matchValue.length - diff,
+            tag,
+          );
+
+          final taggedText = TaggedText(
+            startIndex: startIndex - diff,
+            endIndex: endIndex - diff,
+            text: tag,
+          );
+          _tags[taggedText] = idAndTag.first;
+          _trie.insert(taggedText);
+
+          diff += matchValue.length - tag.length;
+        } catch (_) {}
       }
-      // Handle user mentions with spaces
-      final id = split.first.trim().replaceFirst("@", "");
-      return [id, split[split.length - 2].trim()];
-    };
 
-    final matches = pattern.allMatches(text);
-
-    int diff = 0;
-
-    for (var match in matches) {
-      try {
-        final matchValue = match.group(1)!;
-
-        final idAndTag = parser(matchValue);
-        final triggerChar = text.substring(match.start, match.start + 1);
-
-        // Preserve spaces in tags
-        final tag = "$triggerChar${idAndTag.last.trim()}";
-        final startIndex = match.start;
-        final endIndex = startIndex + tag.length;
-
-        newText = newText.replaceRange(
-          startIndex - diff,
-          startIndex + matchValue.length - diff,
-          tag,
+      if (newText.isNotEmpty) {
+        _runDeferedAction(() => text = newText);
+        _runDeferedAction(
+          () => selection = TextSelection.fromPosition(
+            TextPosition(offset: newText.length),
+          ),
         );
-
-        final taggedText = TaggedText(
-          startIndex: startIndex - diff,
-          endIndex: endIndex - diff,
-          text: tag,
-        );
-        _tags[taggedText] = idAndTag.first;
-        _trie.insert(taggedText);
-
-        diff += matchValue.length - tag.length;
-      } catch (_) {}
+      }
     }
 
-    if (newText.isNotEmpty) {
-      _runDeferedAction(() => text = newText);
-      _runDeferedAction(
-        () => selection = TextSelection.fromPosition(
-          TextPosition(offset: newText.length),
-        ),
-      );
+    // Now format the text based on existing tags
+    String result = text;
+
+    // Sort tags by starting position (descending) to avoid position issues when replacing
+    List<TaggedText> sortedTags = _tags.keys.toList()
+      ..sort((a, b) => b.startIndex.compareTo(a.startIndex));
+
+    // Replace each tag with its formatted version
+    for (var tag in sortedTags) {
+      String id = _tags[tag]!;
+      String tagText = tag.text.substring(1); // Remove trigger char
+      String triggerChar = tag.text[0].toString();
+
+      String formattedTagText =
+          _formatTagTextCallback?.call(id, tagText, triggerChar) ??
+              "$triggerChar$id#$tagText#";
+
+      // Add this formatted text to our _text result
+      result =
+          result.replaceRange(tag.startIndex, tag.endIndex, formattedTagText);
     }
+
+    _text = result;
   }
 
   /// Defers [InputTagger]'s listener attached to this controller.
@@ -1143,72 +1204,6 @@ class InputTaggerController extends TextEditingController {
         value.isComposingRangeValid);
 
     return _buildTextSpan(style);
-  }
-
-  /// Parses [text] and styles nested tagged texts using style from [_tagStyles].
-  List<TextSpan> _getNestedSpans(String text, int startIndex) {
-    if (text.isEmpty) return [];
-
-    List<TextSpan> spans = [];
-    int start = startIndex;
-
-    final nestedWords = text.splitWithDelim(_triggerCharactersPattern);
-    bool startsWithTrigger = text[0].contains(_triggerCharactersPattern) &&
-        nestedWords.first.isNotEmpty;
-
-    String triggerChar = "";
-    int triggerCharIndex = 0;
-
-    for (int i = 0; i < nestedWords.length; i++) {
-      final nestedWord = nestedWords[i];
-
-      if (nestedWord.contains(_triggerCharactersPattern)) {
-        if (triggerChar.isNotEmpty && triggerCharIndex == i - 2) {
-          spans.add(TextSpan(text: triggerChar));
-          start += triggerChar.length;
-          triggerChar = "";
-          triggerCharIndex = i;
-          continue;
-        }
-        triggerChar = nestedWord;
-        triggerCharIndex = i;
-        continue;
-      }
-
-      String word;
-      if (i == 0) {
-        word = startsWithTrigger ? "$triggerChar$nestedWord" : nestedWord;
-      } else {
-        word = "$triggerChar$nestedWord";
-      }
-
-      TaggedText? taggedText;
-
-      if (word.isNotEmpty) {
-        taggedText = _trie.search(word, start);
-      }
-
-      if (taggedText == null) {
-        spans.add(TextSpan(text: word));
-      } else if (taggedText.startIndex == start) {
-        String suffix = word.substring(taggedText.text.length);
-
-        spans.add(
-          TextSpan(
-            text: taggedText.text,
-            style: _tagStyles[triggerChar],
-          ),
-        );
-        if (suffix.isNotEmpty) spans.add(TextSpan(text: suffix));
-      } else {
-        spans.add(TextSpan(text: word));
-      }
-
-      start += word.length;
-      triggerChar = "";
-    }
-
-    return spans;
   }
 
   /// Builds text value with tagged texts styled using styles from [_tagStyles].
@@ -1315,28 +1310,26 @@ class InputTaggerController extends TextEditingController {
   }
 
   /// The tags that are currently applied.
+  /// The tags that are currently applied.
   Iterable<Tag> get tags {
     if (text.isEmpty) return [];
 
-    final splitText = text.split(" ");
-
+    // Use the existing tags map instead of re-parsing the text
     List<Tag> result = [];
-    int start = 0;
-    int end = splitText.first.length;
-    int length = splitText.length;
 
-    for (int i = 0; i < length; i++) {
-      final text = splitText[i];
+    // Simply iterate through the _tags map which already contains
+    // the correct positions and text for all tags
+    for (var taggedText in _tags.keys) {
+      final id = _tags[taggedText]!;
+      final tagText = taggedText.text;
+      final triggerChar = tagText[0].toString();
+      final content = tagText.substring(1); // Remove the trigger character
 
-      if (text.contains(_triggerCharactersPattern)) {
-        final tags = _getTags(text, start);
-        result.addAll(tags);
-      }
-
-      start = end + 1;
-      if (i + 1 < length) {
-        end = start + splitText[i + 1].length;
-      }
+      result.add(Tag(
+        id: id,
+        text: content,
+        triggerCharacter: triggerChar,
+      ));
     }
 
     return result;
