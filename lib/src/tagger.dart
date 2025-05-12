@@ -246,6 +246,7 @@ class _InputTaggerState extends State<InputTagger> {
     List<String> result = [];
     int start = startIndex;
 
+    print("Parsing text: $text");
     // Check if this entire text is a tag
     TaggedText? fullTag = _tagTrie.search(text, startIndex);
     if (fullTag != null && fullTag.startIndex == startIndex) {
@@ -259,6 +260,7 @@ class _InputTaggerState extends State<InputTagger> {
         formattedTagText,
         triggerChar,
       );
+      print("Formatted tag text: $formattedTagText");
       return formattedTagText;
     }
 
@@ -581,7 +583,7 @@ class _InputTaggerState extends State<InputTagger> {
   /// Non-conforming characters terminate the search context.
   /// {@endtemplate}
   late final _searchRegexPattern =
-      widget.searchRegex ?? RegExp(r'^[a-zA-Z-]*$');
+      widget.searchRegex ?? RegExp(r'^[a-zA-Z\s-]*$');
 
   int _lastCursorPosition = 0;
   bool _isBacktrackingToSearch = false;
@@ -651,7 +653,19 @@ class _InputTaggerState extends State<InputTagger> {
     _isBacktrackingToSearch = false;
     return false;
   }
+  bool _isCursorInsideTag() {
+    final cursorPosition = controller.selection.baseOffset;
+    final text = controller.text;
 
+    if (cursorPosition == null || text.isEmpty) return false;
+
+    for (var tag in _tags.keys) {
+      if (cursorPosition > tag.startIndex && cursorPosition <= tag.endIndex) {
+        return true;
+      }
+    }
+    return false;
+  }
   /// Listener attached to [controller] to listen for change in
   /// search context and tag selection.
   ///
@@ -664,19 +678,26 @@ class _InputTaggerState extends State<InputTagger> {
   void _tagListener() {
     final currentCursorPosition = controller.selection.baseOffset;
     final text = controller.text;
-    if (_lastCachedText.length > text.length) {
-      // Deletion occurred
-      for (var tag in _tags.keys) {
-        if (currentCursorPosition <= tag.endIndex - 1 &&
-            currentCursorPosition >= tag.startIndex) {
-          _defer = true;
+    if (_isCursorInsideTag()) {
+      _shouldHideOverlay(true);
+    }
+    // Fix: Improved handling of deletion near adjacent tags
+    if (_lastCachedText.length != text.length) { // Deletion occurred
+      final tagsToRemove = _tags.keys.where((tag) {
+        // More careful range checking to prevent out-of-range errors
+        return tag.startIndex < text.length &&  // Make sure not out of range
+            currentCursorPosition <= tag.endIndex-1 &&
+            currentCursorPosition >= tag.startIndex+2;
+      }).toList();
+
+      if (tagsToRemove.isNotEmpty) {
+        //_defer = true;
+
+        for (var tag in tagsToRemove) {
           _tags.remove(tag);
-          _tagTrie.clear();
-          _tagTrie.insertAll(_tags.keys);
-          _lastCachedText = text;
-          _onFormattedTextChanged();
-          return;
         }
+        _tagTrie.clear();
+        _tagTrie.insertAll(_tags.keys);
       }
     }
     // Check for backtracking search behavior
@@ -701,10 +722,12 @@ class _InputTaggerState extends State<InputTagger> {
       // when the call to _tagListener is deffered.
       int position = currentCursorPosition - 1;
       if (position >= 0 && triggerCharacters.contains(text[position])) {
-        _shouldSearch = true;
-        _currentTriggerChar = text[position];
-        if (widget.triggerStrategy == TriggerStrategy.eager) {
-          _extractAndSearch(text, position);
+        if (!_isCursorInsideTag()) {
+          _shouldSearch = true;
+          _currentTriggerChar = text[position];
+          if (widget.triggerStrategy == TriggerStrategy.eager) {
+            _extractAndSearch(text, position);
+          }
         }
       }
       _onFormattedTextChanged();
@@ -844,6 +867,10 @@ class _InputTaggerState extends State<InputTagger> {
   /// and calls [InputTagger.onSearch].
   void _extractAndSearch(String text, int endOffset) {
     try {
+      if (_isCursorInsideTag()) {
+          _shouldHideOverlay(true);
+          return;
+      }
       int index =
           text.substring(0, endOffset + 1).lastIndexOf(_currentTriggerChar);
 
