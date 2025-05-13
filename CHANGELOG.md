@@ -1,3 +1,13 @@
+## 2.1.0
+
+* Added `isInitialTag` property to controller for better control over initial tag state
+* Enhanced search prevention logic to check both cursor position and initial tag state
+* Fixed tag deletion behavior by removing unnecessary defer calls
+* Improved trie data structure management after tag removal
+* Enhanced overlay hiding logic with additional initial tag state checks
+* Prevented search activation when controller indicates initial tag presence
+* Fixed edge cases in tag manipulation when dealing with initial tags
+
 ## 2.0.1
 
 * Added direct tag deletion when cursor is positioned within tag boundaries

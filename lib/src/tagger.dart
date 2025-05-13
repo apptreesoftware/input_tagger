@@ -678,7 +678,7 @@ class _InputTaggerState extends State<InputTagger> {
   void _tagListener() {
     final currentCursorPosition = controller.selection.baseOffset;
     final text = controller.text;
-    if (_isCursorInsideTag()) {
+    if (_isCursorInsideTag() || controller.isInitialTag) {
       _shouldHideOverlay(true);
     }
     // Fix: Improved handling of deletion near adjacent tags
@@ -691,13 +691,11 @@ class _InputTaggerState extends State<InputTagger> {
       }).toList();
 
       if (tagsToRemove.isNotEmpty) {
-        //_defer = true;
 
         for (var tag in tagsToRemove) {
           _tags.remove(tag);
         }
-        _tagTrie.clear();
-        _tagTrie.insertAll(_tags.keys);
+
       }
     }
     // Check for backtracking search behavior
@@ -722,7 +720,7 @@ class _InputTaggerState extends State<InputTagger> {
       // when the call to _tagListener is deffered.
       int position = currentCursorPosition - 1;
       if (position >= 0 && triggerCharacters.contains(text[position])) {
-        if (!_isCursorInsideTag()) {
+        if (!_isCursorInsideTag() && !controller.isInitialTag) {
           _shouldSearch = true;
           _currentTriggerChar = text[position];
           if (widget.triggerStrategy == TriggerStrategy.eager) {
@@ -867,7 +865,7 @@ class _InputTaggerState extends State<InputTagger> {
   /// and calls [InputTagger.onSearch].
   void _extractAndSearch(String text, int endOffset) {
     try {
-      if (_isCursorInsideTag()) {
+      if (_isCursorInsideTag() || controller.isInitialTag) {
           _shouldHideOverlay(true);
           return;
       }
@@ -1186,6 +1184,8 @@ class InputTaggerController extends TextEditingController {
   void dismissOverlay() {
     _dismissOverlayCallback?.call();
   }
+  ///if initialTag
+  bool isInitialTag = false;
 
   /// Adds a tag.
   void addTag({required String id, required String name}) {
