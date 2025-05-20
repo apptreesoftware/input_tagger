@@ -82,6 +82,7 @@ class InputTagger extends StatefulWidget {
     required this.builder,
     this.padding = EdgeInsets.zero,
     this.overlayHeight = 380,
+    this.overlayWidth = 380,
     this.triggerCharacterAndStyles = const {},
     this.overlayPosition = OverlayPosition.top,
     this.triggerStrategy = TriggerStrategy.deferred,
@@ -104,6 +105,9 @@ class InputTagger extends StatefulWidget {
 
   /// The [overlay]'s height.
   final double overlayHeight;
+
+  /// The [overlay]'s width.
+  final double overlayWidth;
 
   /// Formats and replaces tags for raw text retrieval.
   /// By default, tags are replaced in this format:
@@ -868,8 +872,8 @@ class _InputTaggerState extends State<InputTagger> {
   void _extractAndSearch(String text, int endOffset) {
     try {
       if (_isCursorInsideTag() || controller.isInitialTag) {
-          _shouldHideOverlay(true);
-          return;
+        _shouldHideOverlay(true);
+        return;
       }
       int index =
           text.substring(0, endOffset + 1).lastIndexOf(_currentTriggerChar);
@@ -942,10 +946,11 @@ class _InputTaggerState extends State<InputTagger> {
         if (widget.overlayPosition == OverlayPosition.bottom) {
           bottom = offset.dy - widget.overlayHeight - widget.padding.vertical;
         }
-
+        double screenWidth = MediaQuery.of(context).size.width;
+        double leftPosition = (screenWidth - widget.overlayWidth) / 2;
         return Positioned(
-          left: offset.dx,
-          width: width,
+          left: leftPosition,
+          width: widget.overlayWidth,
           height: widget.overlayHeight,
           top: top,
           bottom: bottom,
