@@ -244,90 +244,6 @@ class _InputTaggerState extends State<InputTagger> {
     return RegExp(pattern);
   }
 
-  /// Extracts nested tags (if any) from [text] and formats them.
-  String _parseAndFormatNestedTags(String text, int startIndex) {
-    if (text.isEmpty) return "";
-    List<String> result = [];
-    int start = startIndex;
-
-    print("Parsing text: $text");
-    // Check if this entire text is a tag
-    TaggedText? fullTag = _tagTrie.search(text, startIndex);
-    if (fullTag != null && fullTag.startIndex == startIndex) {
-      // This entire text is a tag, format it consistently
-      String formattedTagText =
-          fullTag.text.substring(1); // Remove trigger char
-      String triggerChar = fullTag.text[0].toString();
-
-      formattedTagText = _formatTagText(
-        _tags[fullTag]!,
-        formattedTagText,
-        triggerChar,
-      );
-      print("Formatted tag text: $formattedTagText");
-      return formattedTagText;
-    }
-
-    final nestedWords = text.splitWithDelim(_triggerCharactersPattern);
-    bool startsWithTrigger =
-        triggerCharacters.contains(text[0]) && nestedWords.first.isNotEmpty;
-
-    String triggerChar = "";
-    int triggerCharIndex = 0;
-
-    for (int i = 0; i < nestedWords.length; i++) {
-      final nestedWord = nestedWords[i];
-
-      if (nestedWord.contains(_triggerCharactersPattern)) {
-        if (triggerChar.isNotEmpty && triggerCharIndex == i - 2) {
-          result.add(triggerChar);
-          start += triggerChar.length;
-          triggerChar = "";
-          triggerCharIndex = i;
-          continue;
-        }
-        triggerChar = nestedWord;
-        triggerCharIndex = i;
-        continue;
-      }
-
-      String word;
-      if (i == 0) {
-        word = startsWithTrigger ? "$triggerChar$nestedWord" : nestedWord;
-      } else {
-        word = "$triggerChar$nestedWord";
-      }
-
-      TaggedText? taggedText;
-
-      if (word.isNotEmpty) {
-        taggedText = _tagTrie.search(word, start);
-      }
-
-      if (taggedText == null) {
-        result.add(word);
-      } else if (taggedText.startIndex == start) {
-        String suffix = word.substring(taggedText.text.length);
-        String formattedTagText = taggedText.text.replaceAll(triggerChar, "");
-        formattedTagText = _formatTagText(
-          _tags[taggedText]!,
-          formattedTagText,
-          triggerChar,
-        );
-
-        result.add(formattedTagText);
-        if (suffix.isNotEmpty) result.add(suffix);
-      } else {
-        result.add(word);
-      }
-
-      start += word.length;
-      triggerChar = "";
-    }
-
-    return result.join("");
-  }
-
   /// Formatted text where tags are replaced with the result
   /// of calling [InputTagger.tagTextFormatter] if it's not null.
   /// Otherwise, tags are replaced in this format:
@@ -657,6 +573,7 @@ class _InputTaggerState extends State<InputTagger> {
     _isBacktrackingToSearch = false;
     return false;
   }
+
   bool _isCursorInsideTag() {
     final cursorPosition = controller.selection.baseOffset;
     final text = controller.text;
@@ -670,6 +587,7 @@ class _InputTaggerState extends State<InputTagger> {
     }
     return false;
   }
+
   /// Listener attached to [controller] to listen for change in
   /// search context and tag selection.
   ///
@@ -686,22 +604,21 @@ class _InputTaggerState extends State<InputTagger> {
       _shouldHideOverlay(true);
     }
     // Fix: Improved handling of deletion near adjacent tags
-    if (_lastCachedText.length != text.length) { // Deletion occurred
+    if (_lastCachedText.length != text.length) {
+      // Deletion occurred
       final tagsToRemove = _tags.keys.where((tag) {
         // More careful range checking to prevent out-of-range errors
-        return tag.startIndex < text.length &&  // Make sure not out of range
-            currentCursorPosition <= tag.endIndex-1 &&
-            currentCursorPosition >= tag.startIndex+2;
+        return tag.startIndex < text.length && // Make sure not out of range
+            currentCursorPosition <= tag.endIndex - 1 &&
+            currentCursorPosition >= tag.startIndex + 2;
       }).toList();
 
       if (tagsToRemove.isNotEmpty) {
-
         for (var tag in tagsToRemove) {
           _tags.remove(tag);
         }
         _shouldSearch = false;
       }
-
     }
     // Check for backtracking search behavior
     if (_shouldSearch &&
@@ -1074,10 +991,54 @@ class InputTaggerController extends TextEditingController {
     RegExp? pattern,
     List<String> Function(String)? parser,
   }) {
-    if (_triggerCharsPattern == null) {
-      _formatTagsCallback = () => _formatTags(pattern, parser);
-    } else {
-      _formatTagsCallback?.call();
+    _formatTags(pattern, parser);
+  }
+
+  void setFormattedText(String text,
+      {required RegExp pattern,
+      required List<String> Function(String) parser}) {
+    _clearCallback?.call();
+
+    //This will accept a value like "Book ##room_1234[@Workstation1]## for 2pm tomorrow with ##user_1234[@John Doe]##"
+    //It will find all of the mentioned values wrapped in ## and replace them with the formatted tag
+    //For each tag it finds, it will create a TaggedText object where the startIndex is the start of the tag and the endIndex is the end of the tag
+    //It will then add the TaggedText object to the _tags map and the _trie
+
+    //The final result for this example will be:
+    //Book @Workstation1 for 2pm tomorrow with @John Doe
+    //The _tags map will be:
+    //{
+    //  "@Workstation1": "room_1234",
+    //  "@John Doe": "user_1234"
+    //}
+    //The _trie will be:
+    //[TaggedText(startIndex: 5, endIndex: 18, text: "@Workstation1"), TaggedText(startIndex: 30, endIndex: 44, text: "@John Doe")]
+
+    var updatedText = text;
+    final matches = pattern.allMatches(text);
+    for (var match in matches) {
+      final matchValue = match.group(1)!;
+      final idAndTag = parser(matchValue);
+      final tag = "@${idAndTag.last.trim()}";
+      updatedText = updatedText.replaceRange(match.start, match.end, tag);
+      var startIndex = updatedText.lastIndexOf(tag);
+      var endIndex = startIndex + tag.length;
+      final taggedText = TaggedText(
+        startIndex: startIndex,
+        endIndex: endIndex,
+        text: tag,
+      );
+      _tags[taggedText] = idAndTag.first;
+      _trie.insert(taggedText);
+    }
+    if (updatedText.isNotEmpty) {
+      _text = updatedText;
+      _runDeferedAction(() => this.text = updatedText);
+      _runDeferedAction(
+        () => selection = TextSelection.fromPosition(
+          TextPosition(offset: updatedText.length),
+        ),
+      );
     }
   }
 
@@ -1191,6 +1152,7 @@ class InputTaggerController extends TextEditingController {
   void dismissOverlay() {
     _dismissOverlayCallback?.call();
   }
+
   ///if initialTag
   bool isInitialTag = false;
 
