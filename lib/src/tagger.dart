@@ -1015,8 +1015,9 @@ class InputTaggerController extends TextEditingController {
     //[TaggedText(startIndex: 5, endIndex: 18, text: "@Workstation1"), TaggedText(startIndex: 30, endIndex: 44, text: "@John Doe")]
 
     var updatedText = text;
-    final matches = pattern.allMatches(text);
-    for (var match in matches) {
+
+    while (pattern.hasMatch(updatedText)) {
+      final match = pattern.firstMatch(updatedText)!;
       final matchValue = match.group(1)!;
       final idAndTag = parser(matchValue);
       final tag = "@${idAndTag.last.trim()}";
@@ -1031,6 +1032,7 @@ class InputTaggerController extends TextEditingController {
       _tags[taggedText] = idAndTag.first;
       _trie.insert(taggedText);
     }
+
     if (updatedText.isNotEmpty) {
       _text = updatedText;
       _runDeferedAction(() => this.text = updatedText);
